@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.lineman.daemon.plist — launchd Service Definition
+  ======================================================
+  Install to /Library/LaunchDaemons/ (root-owned, 644).
+  Loaded by launchd at boot; runs as root.
+
+  To install:  sudo cp com.lineman.daemon.plist /Library/LaunchDaemons/
+               sudo launchctl load -w /Library/LaunchDaemons/com.lineman.daemon.plist
+
+  To unload:   sudo launchctl unload /Library/LaunchDaemons/com.lineman.daemon.plist
+
+  Logs:        /var/log/lineman-daemon.log
+               /var/log/lineman-daemon-error.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lineman.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/usr/local/lineman/lineman-daemon/daemon.py</string>
+    </array>
+
+    <!-- Run as root — required for pfctl and tcpdump on pflog0 -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Start at boot, restart on crash -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/lineman-daemon.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/lineman-daemon-error.log</string>
+
+    <!-- Throttle restarts — don't spin-loop if daemon exits immediately -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Only root and staff group members can interact with the socket -->
+    <key>Sockets</key>
+    <dict>
+        <key>LinemanSocket</key>
+        <dict>
+            <key>SockPathName</key>
+            <string>/var/run/lineman.sock</string>
+            <key>SockPathMode</key>
+            <integer>432</integer>
+        </dict>
+    </dict>
+</dict>
+</plist>
