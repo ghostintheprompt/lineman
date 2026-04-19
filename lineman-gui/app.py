@@ -364,8 +364,20 @@ class LinemanApp:
 
 def main():
     root = tk.Tk()
+    _set_icon(root)
     app  = LinemanApp(root)
     root.mainloop()
+
+
+def _set_icon(root: tk.Tk) -> None:
+    icon_path = Path(__file__).parent.parent / "docs" / "icon.png"
+    if icon_path.exists():
+        try:
+            img = tk.PhotoImage(file=str(icon_path))
+            root.wm_iconphoto(True, img)
+            root._icon_ref = img  # prevent GC
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

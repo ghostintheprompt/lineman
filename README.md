@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/icon.png" width="220" alt="Lineman">
+</p>
+
 # Lineman — macOS HIPS & Egress Forensics Prototype
 
 A Host Intrusion Prevention System (HIPS) prototype demonstrating macOS
