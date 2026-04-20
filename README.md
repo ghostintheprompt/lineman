@@ -1,5 +1,9 @@
 # Lineman — macOS HIPS & Egress Forensics Prototype
 
+<div align="center">
+  <img src="lineman.png" width="256" height="256" alt="Lineman Icon" />
+</div>
+
 A Host Intrusion Prevention System (HIPS) prototype demonstrating macOS
 security internals: **pf anchor management**, **XPC process lineage tracking**,
 **privilege-separated daemon/GUI architecture**, and **egress forensic capture**
