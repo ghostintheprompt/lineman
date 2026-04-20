@@ -1,13 +1,7 @@
-# Lineman — macOS HIPS & Egress Forensics Prototype
+<img src="lineman.png" width="200">
 
-<div align="center">
-  <img src="lineman.png" width="256" height="256" alt="Lineman Icon" />
-</div>
-
-A Host Intrusion Prevention System (HIPS) prototype demonstrating macOS
-security internals: **pf anchor management**, **XPC process lineage tracking**,
-**privilege-separated daemon/GUI architecture**, and **egress forensic capture**
-via `pflog0`.
+# Lineman
+A Host Intrusion Prevention System (HIPS) prototype demonstrating macOS security internals. — v1.0
 
 ```
 ┌──────────────────────────────────────────┐
@@ -37,7 +31,7 @@ via `pflog0`.
 ---
 
 ## Architecture
-
+...
 ### Why Two Processes?
 
 Running a GUI as `sudo` is a macOS security anti-pattern. If the GUI is
