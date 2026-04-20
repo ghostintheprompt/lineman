@@ -1,4 +1,6 @@
-<img src="lineman.png" width="200">
+<p align="center">
+  <img src="lineman.png" width="520">
+</p>
 
 # Lineman
 A Host Intrusion Prevention System (HIPS) prototype demonstrating macOS security internals. — v1.0
