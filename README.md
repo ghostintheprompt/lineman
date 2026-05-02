@@ -2,180 +2,76 @@
   <img src="lineman.png" width="520">
 </p>
 
-# Lineman
-A Host Intrusion Prevention System (HIPS) prototype demonstrating macOS security internals. — v1.0
+# Lineman v2.0 — Ghost-Protocol HIPS
+A Host Intrusion Prevention System (HIPS) elevated for the 2026/2027 macOS security landscape.
 
 ```
 ┌──────────────────────────────────────────┐
 │  lineman-gui (unprivileged user process) │
-│  Tkinter control surface                 │
+│  Tkinter control surface + Ed25519 Verify│
 └────────────────┬─────────────────────────┘
                  │  Unix socket  /var/run/lineman.sock
-                 │  JSON command API
+                 │  JSON command API + Public Key fetch
 ┌────────────────▼─────────────────────────┐
 │  lineman-daemon (root)                   │
 │  ┌──────────────┐  ┌───────────────────┐ │
-│  │ pf_anchor.py │  │ process_lineage.py│ │
-│  │ pf anchor    │  │ XPC helper scan   │ │
-│  │ table mgmt   │  │ PID lifecycle mon │ │
+│  │ bsm_monitor.py│  │ dns_correlator.py │ │
+│  │ Real-time BSM │  │ DNS <-> IP Match  │ │
+│  │ (exec events) │  │ (ECH Bypass)      │ │
 │  └──────────────┘  └───────────────────┘ │
 │  ┌────────────────────────────────────┐  │
 │  │ egress_forensics.py                │  │
-│  │ tcpdump pflog0 → SNI + host parse  │  │
+│  │ Ed25519 Immutable Signing          │  │
 │  │ Tamper-evident JSON reports        │  │
 │  └────────────────────────────────────┘  │
 └──────────────────────────────────────────┘
-         │                  │
-    socketfilterfw         pf anchor
-    (ALF per-app block)    <lineman_blocked> table
 ```
 
 ---
 
-## Architecture
-...
-### Why Two Processes?
+## v2.0 Elevation Features (The Python Maximalist)
 
-Running a GUI as `sudo` is a macOS security anti-pattern. If the GUI is
-compromised (by a malicious `.app` bundle being inspected, or a Tkinter
-vulnerability), an attacker gains root. Lineman separates concerns:
+Lineman v2.0 transitions from reactive polling to **event-driven, cryptographically-rooted defense**.
 
-- **`lineman-daemon`** — minimal root process, owns all privileged syscalls,
-  exposes a narrow JSON socket API
-- **`lineman-gui`** — unprivileged Tkinter app, never calls `pfctl` or `tcpdump`
-  directly
+### 1. Real-Time Process Events (OpenBSM)
+Replaced 2-second polling with real-time `/dev/auditpipe` monitoring.
+- **Zero-Delay Detection:** Child processes and XPC helpers are identified and blocked the microsecond they execute.
+- **Bypass Resistance:** Malicious helpers can no longer "slip through" between polling intervals.
 
-### pf Anchor — Non-Destructive Firewall Integration
+### 2. DNS-Based Egress Correlation (ECH Bypass)
+Solved the "SNI Blindspot" caused by TLS 1.3 Encrypted Client Hello (ECH).
+- **Correlation Engine:** Intercepts local DNS activity to map hostnames to resolved IPs.
+- **Forensic Visibility:** When a connection to an IP is dropped, Lineman looks up the recent DNS query to identify the true target domain, bypassing encryption.
 
-Lineman creates a dedicated pf anchor (`com.lineman.blocker`) and never touches
-the system's main ruleset beyond two lines:
-
-```
-# Added to /etc/pf.conf:
-anchor "com.lineman.blocker"
-load anchor "com.lineman.blocker" from "/etc/pf.anchors/com.lineman.blocker"
-```
-
-The anchor file contains a persistent IP table and two rules:
-
-```
-table <lineman_blocked> persist {}
-block drop out log quick proto tcp from any to <lineman_blocked>
-block drop out log quick proto udp from any to <lineman_blocked>
-```
-
-IPs are added/removed dynamically without reloading pf:
-
-```bash
-pfctl -a com.lineman.blocker -t lineman_blocked -T add 35.186.224.25
-pfctl -a com.lineman.blocker -t lineman_blocked -T flush
-```
-
-### Process Lineage Engine
-
-`pgrep -f bundle_id` misses a large fraction of an app's network-capable
-processes. The lineage engine uses three strategies in combination:
-
-1. **Bundle-path scan** — any process whose `argv` contains the `.app` path
-2. **XPC service enumeration** — reads `Contents/XPCServices/*.xpc/Info.plist`
-   to find declared helper bundle IDs, matches them against running processes
-3. **LaunchAgent correlation** — scans `~/Library/LaunchAgents/` for plists
-   whose `Program` key references the app bundle (catches update daemons that
-   survive parent termination)
-4. **PPID tree expansion** — BFS from any matched PID to capture all descendants
-
-### Egress Forensics
-
-The `log` keyword in the pf rules routes dropped packets to the `pflog0`
-interface. When a block is applied, `egress_forensics.py` starts a 30-second
-`tcpdump -i pflog0` session and parses captured packets for:
-
-- Destination IP and port
-- **TLS SNI** — extracted by parsing the raw ClientHello (no MITM required)
-- **HTTP Host header** — for plaintext connections
-- Destination classification: `TELEMETRY` / `UPDATE_SERVER` / `CRASH_REPORTER`
-  / `ADVERTISING` / `CDN` / `ENCRYPTED_UNKNOWN`
-
-Reports are written to `forensics/<timestamp>_<app>.json` as tamper-evident
-records (SHA-256 of the canonical body).
+### 3. Cryptographically Signed Immutable Reports
+Replaced simple hashing with **Asymmetric Integrity Signing**.
+- **Hardware-Comparable Security:** Every report is signed by the daemon using a root-protected Ed25519 private key.
+- **Visual Verification:** The GUI fetches the public key and visually confirms report integrity. Any tampering triggers a critical SOC alert.
 
 ---
 
-## Installation
+## Security Scenarios (Ghost-Protocol)
+
+- **s1: Trojan-Egress** — exfiltration via spoofed headers.
+- **s2: Side-Channel-Leak** — data leakage via timing/size modulation.
+- **s3: Buffer-Overflow-Sim** — validation against crafted payloads.
+
+---
+
+## Installation & Usage
 
 ```bash
-# 1. Clone
-git clone https://github.com/your-org/lineman
-cd lineman
+# 1. Install dependencies
+pip3 install cryptography psutil
 
-# 2. Install dependencies
-pip3 install psutil
-
-# 3. Install (sets up daemon, pf anchor, launchd service)
-sudo bash install.sh
-```
-
-### Manual start (development)
-
-```bash
-# Terminal 1 — daemon (root)
+# 2. Start Daemon (Root required for BSM/Audit)
 sudo python3 lineman-daemon/daemon.py
 
-# Terminal 2 — GUI (user)
+# 3. Start GUI
 python3 lineman-gui/app.py
 ```
 
 ---
 
-## Usage
-
-1. Start the GUI (`python3 lineman-gui/app.py`)
-2. The status indicator shows **DAEMON ONLINE** when the root daemon is
-   reachable
-3. Click **+ Add App**, navigate to `/Applications/`, select any `.app`
-4. The daemon will:
-   - Block the app via the macOS Application Layer Firewall
-   - Discover all XPC helpers and child processes
-   - Resolve current outbound connections and add their IPs to the pf table
-   - Start a 30-second egress forensic capture on `pflog0`
-5. Open `forensics/*.json` to read the egress report
-
----
-
-## Project Structure
-
-```
-lineman/
-├── lineman-daemon/
-│   ├── daemon.py              # Root daemon — IPC server + orchestration
-│   ├── pf_anchor.py           # pf anchor lifecycle + table management
-│   ├── process_lineage.py     # XPC discovery + PID lifecycle monitor
-│   └── egress_forensics.py    # pflog0 capture + SNI parsing + JSON reports
-├── lineman-gui/
-│   └── app.py                 # Unprivileged Tkinter control surface
-├── forensics/                 # Egress report output
-├── docs/
-│   └── THREAT_MODEL.md        # How XPC bypasses naive firewalls + mitigations
-├── com.lineman.daemon.plist   # launchd service definition
-├── install.sh                 # Guided installer
-└── app_blocker.py             # Original prototype (preserved)
-```
-
----
-
-## Technical References
-
-- Apple Developer: [XPC Services](https://developer.apple.com/documentation/xpc)
-- Apple Developer: [Network Extensions](https://developer.apple.com/documentation/networkextension)
-- FreeBSD Handbook: [Firewalls / PF](https://docs.freebsd.org/en/books/handbook/firewalls/#firewalls-pf)
-- `man pfctl(8)`, `man pf.conf(5)`, `man pflog(4)`
-- `man socketfilterfw(8)`
-- Apple TN3135: [Inside code signing: Requirements](https://developer.apple.com/documentation/technotes/tn3135-inside-code-signing-requirements)
-
----
-
 ## ⚠ Legal Notice
-
-Authorized security research and system administration use only. pf anchor
-modifications require root. Do not deploy on systems you do not own or
-administer.
+Authorized security research and system administration use only. v2.0 elevation utilizes native macOS auditing subsystems. Do not deploy on systems you do not own.

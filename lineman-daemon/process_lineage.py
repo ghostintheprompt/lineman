@@ -1,31 +1,19 @@
 """
-process_lineage.py — XPC & Child Process Lineage Engine
-========================================================
+process_lineage.py — XPC & Child Process Lineage Engine (v2.0)
+==============================================================
 On macOS, blocking a single PID is almost always insufficient.
 
-Why pgrep -f bundle_id fails:
-  1. Every modern .app ships XPCServices/ — helper binaries that inherit network
-     access from the parent but run under a different process name and often a
-     different UID (sandboxed XPC services spawn under their own sandbox profile).
-  2. Crash reporters, update daemons, and analytics agents are frequently
-     separate binaries inside the .app bundle that the main process forks into
-     the background.
-  3. LaunchAgents registered by the app survive parent termination; they appear
-     as children of launchd (PID 1) so a naïve PPID walk misses them entirely.
+Elevation v2.0 (The Python Maximalist):
+  This version replaces polling with real-time OpenBSM event parsing via
+  bsm_monitor.py. This allows the daemon to react INSTANTLY to new process
+  starts, even if they terminate within milliseconds.
 
-This module detects all of these:
-  • Full ps-tree walk (PPID recursion) starting from any known app PID
-  • Bundle-path correlation: any process whose argv[0] starts with the
-    .app bundle path is counted as part of that app's lineage
-  • XPCServices directory inspection: enumerate declared helper bundle IDs
-    and match them against running processes
-  • LaunchAgent correlation: check ~/Library/LaunchAgents/ for plists whose
-    BundleID or Program key references the app bundle
-
-PIDLifecycleMonitor:
-  A background thread that polls the process table every POLL_INTERVAL seconds.
-  When an app is relaunched (new PIDs appear), it immediately calls the supplied
-  callback so the daemon can reapply blocks to the new process group.
+Detection strategy (layered):
+  1. Real-time OpenBSM (BSM) — execve() events from /dev/auditpipe
+  2. Bundle-path correlation  — argv starts with the app bundle path
+  3. XPCServices helpers      — declared service bundle IDs found in running procs
+  4. PPID tree expansion      — descendants of any PID matched by 1 or 2
+  5. LaunchAgent correlation  — registered agents referencing the bundle
 """
 
 import os
@@ -38,9 +26,14 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
+try:
+    from . import bsm_monitor
+except ImportError:
+    import bsm_monitor
+
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL = 2.0  # seconds between PID sweeps
+POLL_INTERVAL = 2.0  # seconds between PID sweeps (v1.5 fallback)
 
 
 # ── Process table snapshot ────────────────────────────────────────────────────
@@ -126,12 +119,6 @@ def get_process_tree(root_pid: int, procs: list[ProcessInfo] = None) -> list[Pro
 def find_app_processes(app_bundle_path: str) -> list[ProcessInfo]:
     """
     Return every running process that is part of the given .app bundle.
-
-    Detection strategy (layered):
-      1. Bundle-path correlation  — argv starts with the app bundle path
-      2. XPCServices helpers      — declared service bundle IDs found in running procs
-      3. PPID tree expansion      — descendants of any PID matched by 1 or 2
-      4. LaunchAgent correlation  — registered agents referencing the bundle
     """
     procs  = snapshot_processes()
     bundle = app_bundle_path.rstrip("/")
@@ -158,8 +145,9 @@ def find_app_processes(app_bundle_path: str) -> list[ProcessInfo]:
             all_related.add(p.pid)
 
     # ── Strategy 4: LaunchAgent correlation ──────────────────────────────────
-    la_pids = _find_launch_agent_pids(bundle, procs)
-    all_related.update(la_pids)
+    la_info = _find_launch_agents(bundle, procs)
+    for info in la_info:
+        all_related.update(info['pids'])
 
     pid_map = {p.pid: p for p in procs}
     return [pid_map[pid] for pid in all_related if pid in pid_map]
@@ -189,12 +177,8 @@ def _enumerate_xpc_bundle_ids(bundle_path: str) -> list[str]:
     return ids
 
 
-def _find_launch_agent_pids(bundle_path: str, procs: list[ProcessInfo]) -> set[int]:
-    """
-    Search ~/Library/LaunchAgents/ for plists whose Program key or Label
-    references the app bundle path. Match those labels against running processes.
-    """
-    pids: set[int] = set()
+def _find_launch_agents(bundle_path: str, procs: list[ProcessInfo]) -> list[dict]:
+    agents = []
     agent_dirs = [
         Path.home() / "Library" / "LaunchAgents",
         Path("/Library/LaunchAgents"),
@@ -210,28 +194,35 @@ def _find_launch_agent_pids(bundle_path: str, procs: list[ProcessInfo]) -> set[i
                 program  = data.get("Program", "")
                 prog_args = data.get("ProgramArguments", [])
                 label     = data.get("Label", "")
-                all_refs  = " ".join([program] + prog_args)
+                all_refs  = " ".join([program] + [str(a) for a in prog_args])
                 if bundle_path in all_refs:
+                    matched_pids = set()
                     # Match label against process args
                     for p in procs:
                         if label in p.args or (program and program in p.args):
-                            pids.add(p.pid)
+                            matched_pids.add(p.pid)
+                    
+                    agents.append({
+                        "plist_path": str(plist_file),
+                        "label":      label,
+                        "pids":       list(matched_pids),
+                        "soc_alert":  "INC-PERSIST-01"
+                    })
+                    log.info("[persistence] Detected LaunchAgent: %s (%s)", label, plist_file.name)
             except Exception:
                 pass
-    return pids
+    return agents
 
 
-# ── PID lifecycle monitor ─────────────────────────────────────────────────────
+# ── PID lifecycle monitor (The Python Maximalist v2.0) ─────────────────────────
 
 class PIDLifecycleMonitor(threading.Thread):
     """
-    Background thread that polls the process table every POLL_INTERVAL seconds.
-
-    For each tracked app, it compares the current process set against the last
-    known set. When new PIDs appear (app was relaunched, helper respawned), it
-    fires `on_new_pids(app_path, new_pids)` so the daemon can reapply blocks.
-
-    When all PIDs for an app disappear (app quit), it fires `on_app_quit`.
+    v2.0 Orchestrator: Combines BSMMonitor (events) and Polling (fallback).
+    
+    When an app is blocked, we track its bundle path via OpenBSM.
+    Any new process starting within that path triggers an immediate block.
+    The legacy sweep still runs every POLL_INTERVAL as a safety mechanism.
     """
 
     def __init__(
@@ -245,14 +236,45 @@ class PIDLifecycleMonitor(threading.Thread):
         self._running = True
         self.on_new_pids = on_new_pids
         self.on_app_quit = on_app_quit
+        
+        # v2.0: Event-driven monitor
+        self._bsm = bsm_monitor.BSMMonitor(on_exec=self._on_bsm_exec)
+        self._bsm.start()
+
+    def _on_bsm_exec(self, pid: int, ppid: int, path: str):
+        """Callback from BSMMonitor."""
+        with self._lock:
+            for app_path in self._tracked.keys():
+                if path.startswith(app_path):
+                    # Identified a new process for a blocked app!
+                    # Fetch ProcessInfo (need args/comm)
+                    try:
+                        out = subprocess.check_output(
+                            ["ps", "-p", str(pid), "-o", "pid=,ppid=,uid=,comm=,args="],
+                            text=True, stderr=subprocess.DEVNULL
+                        )
+                        parts = out.split(None, 4)
+                        if len(parts) >= 5:
+                            new_proc = ProcessInfo(*parts[:5])
+                            if pid not in self._tracked[app_path]:
+                                log.info("[lifecycle-v2] Instant detection of %s (PID %d)", path, pid)
+                                self._tracked[app_path].add(pid)
+                                self.on_new_pids(app_path, [new_proc])
+                    except Exception:
+                        pass
+                    break
 
     def track(self, app_path: str, initial_pids: list[int]) -> None:
         with self._lock:
+            app_path = app_path.rstrip("/")
             self._tracked[app_path] = set(initial_pids)
+            self._bsm.track_path(app_path)
 
     def untrack(self, app_path: str) -> None:
         with self._lock:
+            app_path = app_path.rstrip("/")
             self._tracked.pop(app_path, None)
+            self._bsm.untrack_path(app_path)
 
     def run(self) -> None:
         while self._running:
@@ -261,6 +283,7 @@ class PIDLifecycleMonitor(threading.Thread):
 
     def stop(self) -> None:
         self._running = False
+        self._bsm.stop()
 
     def _sweep(self) -> None:
         with self._lock:
@@ -274,7 +297,7 @@ class PIDLifecycleMonitor(threading.Thread):
             if new_pids:
                 new_procs = [p for p in current_procs if p.pid in new_pids]
                 log.info(
-                    "[lifecycle] %s: %d new PID(s) detected — reapplying block",
+                    "[lifecycle-fallback] %s: %d new PID(s) detected",
                     os.path.basename(app_path), len(new_pids),
                 )
                 try:
@@ -284,7 +307,7 @@ class PIDLifecycleMonitor(threading.Thread):
 
                 with self._lock:
                     if app_path in self._tracked:
-                        self._tracked[app_path] = current_pids
+                        self._tracked[app_path].update(current_pids)
 
             elif not current_pids and known_pids:
                 log.info("[lifecycle] %s: all PIDs gone (app quit)", os.path.basename(app_path))

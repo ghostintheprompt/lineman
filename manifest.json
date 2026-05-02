@@ -1,0 +1,73 @@
+{
+  "project": "Lineman",
+  "version": "2.0-MAXIMALIST",
+  "manifest": {
+    "scenarios": [
+      {
+        "id": "s1",
+        "name": "Trojan-Egress",
+        "description": "Detection of exfiltration paths using SNI and Host header bypass techniques.",
+        "type": "OFFENSIVE",
+        "actionable": true
+      },
+      {
+        "id": "s2",
+        "name": "Side-Channel-Leak",
+        "description": "Simulation of data leakage via packet timing and size modulation.",
+        "type": "OFFENSIVE",
+        "actionable": true
+      },
+      {
+        "id": "s3",
+        "name": "Buffer-Overflow-Sim",
+        "description": "Injection of crafted payloads to test SOC alert triggers and buffer handling.",
+        "type": "OFFENSIVE",
+        "actionable": true
+      }
+    ],
+    "soc_alerts": [
+      {
+        "id": "INC-EGRESS-01",
+        "severity": "HIGH",
+        "category": "Exfiltration",
+        "description": "Unauthorized outbound connection detected from a blocked application."
+      },
+      {
+        "id": "INC-PERSIST-01",
+        "severity": "CRITICAL",
+        "category": "Persistence",
+        "description": "Persistence mechanism (LaunchAgent/Daemon) detected or blocked."
+      },
+      {
+        "id": "INC-BYPASS-01",
+        "severity": "HIGH",
+        "category": "Bypass",
+        "description": "Attempted firewall bypass via XPC service or child process lineage."
+      },
+      {
+        "id": "INC-INTEGRITY-01",
+        "severity": "CRITICAL",
+        "category": "Integrity",
+        "description": "System firewall (pf) or daemon integrity compromise detected."
+      },
+      {
+        "id": "INC-TAMPER-01",
+        "severity": "MEDIUM",
+        "category": "Tampering",
+        "description": "Unauthorized access attempt to the privileged daemon socket."
+      }
+    ],
+    "guardrails": [
+      {
+        "id": "G1",
+        "name": "Zero-Sanitization Enforcement",
+        "description": "Mandatory check to prevent logic truncation and ensure high-fidelity implementation."
+      },
+      {
+        "id": "G2",
+        "name": "Kernel-Integrity Check",
+        "description": "Periodic validation of pf anchor state and kernel-level logging interfaces."
+      }
+    ]
+  }
+}
